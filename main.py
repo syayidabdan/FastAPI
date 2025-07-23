@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+# main.py
+import json
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import OAuth2PasswordRequestForm
 from typing import Optional, List
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
@@ -6,9 +9,11 @@ from enum import Enum
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from dotenv import load_dotenv
+from database import users_collection, get_user_by_id
+from auth import hash_password, verify_password, create_access_token, get_current_user
 import os
 
-# Load .env file
+# Load .env
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 
@@ -28,15 +33,19 @@ class RoleEnum(str, Enum):
     user = "user"
 
 class UserBase(BaseModel):
-    username: str = Field(examples=["John Doe", "Jane Doe"])
+    username: str = Field(examples=["John Doe"])
     email: EmailStr
-    role: RoleEnum|None
+    role: RoleEnum | None = None
 
 class UserPassword(UserBase):
     password: str
 
-class UserCreate(UserPassword, UserBase):
+class UserCreate(UserPassword):
     pass
+
+class UserLoginRequest(BaseModel):
+    username: str
+    password: str
 
 class UserOut(UserBase):
     id: str
@@ -47,6 +56,10 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     role: Optional[RoleEnum] = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 # === Utilities ===
 
@@ -67,7 +80,7 @@ async def register(user: UserCreate):
     if existing:
         raise HTTPException(status_code=400, detail="Email sudah terdaftar.")
 
-    hashed_password = pwd_context.hash(user.password)
+    hashed_password = hash_password(user.password)
     user_dict = user.dict()
     user_dict["password"] = hashed_password
 
@@ -81,36 +94,52 @@ async def register(user: UserCreate):
         role=user.role
     )
 
-@app.post("/login")
-async def login(email: str, password: str):
-    user = await get_user_by_email(email)
-    if not user or not pwd_context.verify(password, user["password"]):
+@app.post("/login", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await users_collection.find_one({
+        "$or": [
+            {"email": form_data.username},
+            {"username": form_data.username}
+        ]
+    })
+
+    if not user or not verify_password(form_data.password, user["password"]):
         raise HTTPException(status_code=401, detail="Login gagal")
 
+    token_data = {
+        "user_id": str(user["_id"]),
+        "username": user["username"],
+        "email": user["email"]
+    }
+
+    access_token = create_access_token(data=token_data)
     return {
-        "message": "Login berhasil",
-        "user": {
-            "id": str(user["_id"]),
-            "username": user["username"],
-            "email": user["email"]
-        }
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+@app.get("/me")
+async def read_me(current_user: dict = Depends(get_current_user)):
+    return {
+        "id": str(current_user["user_id"]),
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "role": current_user.get("role", "user")
     }
 
 @app.get("/users", response_model=List[UserOut])
 async def get_users():
     users: List[UserOut] = []
     async for user in users_collection.find():
-        print (user)
         users.append(UserOut(
             id=str(user["_id"]),
             username=user["username"],
             email=user["email"],
-            role= user["role"] if "role" in user else None,
+            role=user.get("role", None),
             message="Data ditemukan"
         ))
     return users
 
-# === PATCH /users/{id} ===
 @app.patch("/users/{user_id}", response_model=UserOut)
 async def update_user(user_id: str, update_data: UserUpdate):
     user = await get_user_by_id(user_id)
@@ -120,7 +149,7 @@ async def update_user(user_id: str, update_data: UserUpdate):
     update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
 
     if "password" in update_dict:
-        update_dict["password"] = pwd_context.hash(update_dict["password"])
+        update_dict["password"] = hash_password(update_dict["password"])
 
     await users_collection.update_one(
         {"_id": ObjectId(user_id)},
@@ -133,11 +162,10 @@ async def update_user(user_id: str, update_data: UserUpdate):
         id=str(updated_user["_id"]),
         username=updated_user["username"],
         email=updated_user["email"],
-        role=updated_user["role"],
+        role=updated_user.get("role", None),
         message="User berhasil diupdate"
     )
 
-# === DELETE /users/{id} ===
 @app.delete("/users/{user_id}")
 async def delete_user(user_id: str):
     user = await get_user_by_id(user_id)
@@ -145,5 +173,30 @@ async def delete_user(user_id: str):
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
 
     await users_collection.delete_one({"_id": ObjectId(user_id)})
-
     return {"message": "User berhasil dihapus", "id": user_id}
+
+@app.patch("/update-user")
+async def update_self(data: UserUpdate, current_user: dict = Depends(get_current_user)):
+    update_data = {}
+
+    if data.username:
+        update_data["username"] = data.username
+    if data.email:
+        update_data["email"] = data.email
+    if data.password:
+        update_data["password"] = hash_password(data.password)
+    if data.role:
+        update_data["role"] = data.role
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Tidak ada data yang diupdate.")
+
+    result = await users_collection.update_one(
+        {"_id": ObjectId(current_user["user_id"])}, {"$set": update_data}
+    )
+    print(update_data)
+
+    if result.modified_count == 0:
+        return {"message": "Tidak ada perubahan data."}
+
+    return {"message": "Data user berhasil diupdate."}
