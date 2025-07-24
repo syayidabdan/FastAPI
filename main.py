@@ -1,6 +1,4 @@
-# main.py
-import json
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, APIRouter, Depends, status
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Optional, List
 from passlib.context import CryptContext
@@ -9,15 +7,15 @@ from enum import Enum
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from dotenv import load_dotenv
-from database import users_collection, get_user_by_id
-from auth import hash_password, verify_password, create_access_token, get_current_user
+from auth import hash_password, verify_password, create_access_token, get_current_user, verify_token
 import os
 
-# Load .env
+# Load environment variables
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 
 app = FastAPI()
+router = APIRouter()
 
 # MongoDB setup
 client = AsyncIOMotorClient(MONGO_URI)
@@ -35,7 +33,7 @@ class RoleEnum(str, Enum):
 class UserBase(BaseModel):
     username: str = Field(examples=["John Doe"])
     email: EmailStr
-    role: RoleEnum | None = None
+    role: Optional[RoleEnum] = None
 
 class UserPassword(UserBase):
     password: str
@@ -95,7 +93,7 @@ async def register(user: UserCreate):
     )
 
 @app.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(form_data: UserLoginRequest = Depends()):
     user = await users_collection.find_one({
         "$or": [
             {"email": form_data.username},
@@ -109,7 +107,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     token_data = {
         "user_id": str(user["_id"]),
         "username": user["username"],
-        "email": user["email"]
+        "email": user["email"],
+        "role": user.get("role", "user")
     }
 
     access_token = create_access_token(data=token_data)
@@ -141,7 +140,7 @@ async def get_users():
     return users
 
 @app.patch("/users/{user_id}", response_model=UserOut)
-async def update_user(user_id: str, update_data: UserUpdate):
+async def update_user(user_id: str, update_data: UserUpdate, current_user: dict = Depends(get_current_user)):
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
@@ -166,15 +165,6 @@ async def update_user(user_id: str, update_data: UserUpdate):
         message="User berhasil diupdate"
     )
 
-@app.delete("/users/{user_id}")
-async def delete_user(user_id: str):
-    user = await get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User tidak ditemukan")
-
-    await users_collection.delete_one({"_id": ObjectId(user_id)})
-    return {"message": "User berhasil dihapus", "id": user_id}
-
 @app.patch("/update-user")
 async def update_self(data: UserUpdate, current_user: dict = Depends(get_current_user)):
     update_data = {}
@@ -194,9 +184,24 @@ async def update_self(data: UserUpdate, current_user: dict = Depends(get_current
     result = await users_collection.update_one(
         {"_id": ObjectId(current_user["user_id"])}, {"$set": update_data}
     )
-    print(update_data)
 
     if result.modified_count == 0:
         return {"message": "Tidak ada perubahan data."}
 
     return {"message": "Data user berhasil diupdate."}
+
+@app.delete("/users/{user_id}")
+async def delete_user(user_id: str):
+    user = await get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan")
+
+    await users_collection.delete_one({"_id": ObjectId(user_id)})
+    return {"message": "User berhasil dihapus", "id": user_id}
+
+@router.delete("/logout")
+def logout(token: str = Depends(verify_token)):
+    return {"message": "Logout berhasil. Silakan hapus token dari sisi client."}
+
+# <- Tambahkan ini supaya router aktif
+app.include_router(router)
