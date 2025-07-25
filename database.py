@@ -10,6 +10,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client["user_db"]
 users_collection = db["users"]
+blacklist_collection = db["blacklist"]  # ⬅️ Tambahan ini
 
 # Fungsi ambil user by ID
 async def get_user_by_id(user_id: str):

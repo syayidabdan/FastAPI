@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, APIRouter, Depends, status
+from fastapi import FastAPI, HTTPException, APIRouter, Depends, Query, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Optional, List
 from passlib.context import CryptContext
@@ -7,7 +7,7 @@ from enum import Enum
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from dotenv import load_dotenv
-from auth import hash_password, verify_password, create_access_token, get_current_user, verify_token
+from auth import hash_password, verify_password, create_access_token, get_current_user, verify_token, blacklist_collection
 import os
 
 # Load environment variables
@@ -126,29 +126,64 @@ async def read_me(current_user: dict = Depends(get_current_user)):
         "role": current_user.get("role", "user")
     }
 
-@app.get("/users", response_model=List[UserOut])
-async def get_users():
-    users: List[UserOut] = []
-    async for user in users_collection.find():
-        users.append(UserOut(
-            id=str(user["_id"]),
-            username=user["username"],
-            email=user["email"],
-            role=user.get("role", None),
-            message="Data ditemukan"
-        ))
-    return users
+@app.get("/users")
+async def get_users(
+    skip: int = 0,
+    limit: int = 10,
+    username: str = Query(None),
+    email: str = Query(None),
+    role: str = Query(None)
+):
+    # Buat query dictionary
+    query = {}
+    if username:
+        query["username"] = username
+    if email:
+        query["email"] = email
+    if role:
+        query["role"] = role
+
+    # Hitung total yang sesuai filter
+    total = await users_collection.count_documents(query)
+
+    # Ambil data sesuai filter
+    users = []
+    cursor = users_collection.find(query).skip(skip).limit(limit)
+    async for user in cursor:
+        users.append({
+            "id": str(user["_id"]),
+            "username": user["username"],
+            "email": user["email"],
+            "role": user.get("role", None),
+            "message": "Data ditemukan"
+        })
+
+    return {
+        "total_users": total,
+        "skip": skip,
+        "limit": limit,
+        "data": users
+    }
 
 @app.patch("/users/{user_id}", response_model=UserOut)
 async def update_user(user_id: str, update_data: UserUpdate, current_user: dict = Depends(get_current_user)):
+    # Hanya admin yang boleh akses endpoint ini
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Hanya admin yang dapat mengupdate user lain")
+
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
 
     update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
 
+    # Hash password jika diupdate
     if "password" in update_dict:
         update_dict["password"] = hash_password(update_dict["password"])
+
+    # Cegah admin mengubah role dirinya sendiri
+    if current_user["user_id"] == user_id and "role" in update_dict:
+        raise HTTPException(status_code=403, detail="Admin tidak dapat mengubah role dirinya sendiri")
 
     await users_collection.update_one(
         {"_id": ObjectId(user_id)},
@@ -175,8 +210,10 @@ async def update_self(data: UserUpdate, current_user: dict = Depends(get_current
         update_data["email"] = data.email
     if data.password:
         update_data["password"] = hash_password(data.password)
-    if data.role:
-        update_data["role"] = data.role
+    
+    # Jangan izinkan user ubah rolenya sendiri!
+    # if data.role:
+    #     update_data["role"] = data.role
 
     if not update_data:
         raise HTTPException(status_code=400, detail="Tidak ada data yang diupdate.")
@@ -199,9 +236,16 @@ async def delete_user(user_id: str):
     await users_collection.delete_one({"_id": ObjectId(user_id)})
     return {"message": "User berhasil dihapus", "id": user_id}
 
-@router.delete("/logout")
-def logout(token: str = Depends(verify_token)):
-    return {"message": "Logout berhasil. Silakan hapus token dari sisi client."}
+@router.post("/logout")
+async def logout(request: Request, token: dict = Depends(verify_token)):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header tidak ditemukan")
+
+    token_str = auth_header.replace("Bearer ", "")
+    await blacklist_collection.insert_one({"token": token_str})
+
+    return {"message": "Logout berhasil. Token telah di-blacklist"}
 
 # <- Tambahkan ini supaya router aktif
 app.include_router(router)
