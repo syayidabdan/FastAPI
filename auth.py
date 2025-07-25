@@ -1,78 +1,55 @@
-# auth.py
-import os
-from dotenv import load_dotenv
-from passlib.context import CryptContext
-from jose import jwt, JWTError
-from datetime import datetime, timedelta
-import time
-from fastapi import Depends, HTTPException, status
-# from fastapi.security import OAuth2PasswordBearer
+from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional
-from database import get_user_by_id  # pastikan file database.py punya fungsi ini
+from jose import JWTError, jwt
+from motor.motor_asyncio import AsyncIOMotorClient
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import os
 
-load_dotenv()  # Load from .env
-security = HTTPBearer()
-
+# === Setup ===
+load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+# === MongoDB ===
+MONGO_URI = os.getenv("MONGO_URI")
+client = AsyncIOMotorClient(MONGO_URI)
+db = client.fastAPI
+blacklist_collection = db.blacklist
 
+# === Security Setup ===
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+bearer_scheme = HTTPBearer()  # ⬅️ INI YANG PENTING
 
-def hash_password(password: str) -> str:
+# === Functions ===
+
+def hash_password(password: str):
     return pwd_context.hash(password)
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
+def verify_password(plain_password: str, hashed_password: str):
     return pwd_context.verify(plain_password, hashed_password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)):
     to_encode = data.copy()
-    iat = int(time.time()) 
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update(
-        {"iat": iat, "exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    expire = datetime.utcnow() + expires_delta
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-# def verify_token(token: str, credentials_exception):
-#     try:
-#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-#         user_id: str = payload.get("user_id")
-#         if user_id is None:
-#             raise credentials_exception
-#         return user_id
-#     except JWTError:
-#         raise credentials_exception
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    token = credentials.credentials
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    # In a real application, you would decode and validate the JWT here
-    # For demonstration, we'll just check if the token is not empty
-    if not credentials.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return credentials.credentials # Return the actual token string
+    # ✅ Cek blacklist
+    if await blacklist_collection.find_one({"token": token}):
+        raise HTTPException(status_code=401, detail="Token tidak valid (sudah logout)")
 
-async def get_current_user(token: str = Depends(verify_token)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token tidak valid",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload["user_id"]
-        if not user_id:
-            raise credentials_exception
         return payload
     except JWTError:
-        raise credentials_exception
+        raise HTTPException(status_code=401, detail="Token tidak valid")
 
-    user = await get_user_by_id(user_id)
-    if user is None:
-        raise credentials_exception
-    return user
+async def get_current_user(token_data: dict = Depends(verify_token)):
+    return token_data
