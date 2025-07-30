@@ -6,6 +6,7 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
+import time
 
 # === Setup ===
 load_dotenv()
@@ -21,9 +22,9 @@ blacklist_collection = db.blacklist
 
 # === Security Setup ===
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-bearer_scheme = HTTPBearer()  # ⬅️ INI YANG PENTING
+bearer_scheme = HTTPBearer()
 
-# === Functions ===
+# === Password & Token Utama (Login) ===
 
 def hash_password(password: str):
     return pwd_context.hash(password)
@@ -41,7 +42,6 @@ def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
     token = credentials.credentials
 
-    # ✅ Cek blacklist
     if await blacklist_collection.find_one({"token": token}):
         raise HTTPException(status_code=401, detail="Token tidak valid (sudah logout)")
 
@@ -53,3 +53,25 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(beare
 
 async def get_current_user(token_data: dict = Depends(verify_token)):
     return token_data
+
+# === Token untuk Verifikasi Email ===
+
+def create_email_verification_token(email: str, expires_delta: timedelta = timedelta(days=1)):
+    expire = int(time.time()) + int(expires_delta.total_seconds())
+    payload = {
+        "sub": email,
+        "exp": expire,
+        "type": "verify"
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)  # pastikan algorithm konsisten
+    return token
+
+def verify_email_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "verify":
+            raise HTTPException(status_code=400, detail="Token tidak valid untuk verifikasi email")
+        return payload.get("sub")
+    except JWTError as e:
+        print("❌ JWT ERROR:", e)
+        raise HTTPException(status_code=400, detail="Token verifikasi email tidak valid atau kadaluarsa")
