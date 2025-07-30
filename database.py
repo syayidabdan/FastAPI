@@ -1,17 +1,16 @@
 # database.py
 from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-import os
 from dotenv import load_dotenv
+import os
 
+# Load environment variables
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+# === MongoDB Connection ===
+MONGO_URI = os.getenv("MONGO_URI")
 client = AsyncIOMotorClient(MONGO_URI)
-db = client["user_db"]
-users_collection = db["users"]
-blacklist_collection = db["blacklist"]  # ⬅️ Tambahan ini
+db = client.fastAPI
 
-# Fungsi ambil user by ID
-async def get_user_by_id(user_id: str):
-    return await users_collection.find_one({"_id": ObjectId(user_id)})
+# === Collections ===
+users_collection = db.users
+blacklist_collection = db.blacklist  # digunakan untuk logout (JWT blacklist)
