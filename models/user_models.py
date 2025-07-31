@@ -48,3 +48,14 @@ class UserSelfUpdate(BaseModel):
     username: Optional[str]
     email: Optional[str]
     password: Optional[str]
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6)
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=6)
