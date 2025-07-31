@@ -3,6 +3,7 @@ from bson import ObjectId
 from typing import Optional
 from jose import JWTError, jwt
 from urllib.parse import quote 
+from models.user_models import PasswordResetRequest, PasswordResetConfirm
 
 from auth.token import (
     SECRET_KEY,
@@ -12,7 +13,10 @@ from auth.token import (
     verify_password,
     create_access_token,
     get_current_user,
+    get_verified_user,  # <== tambah ini
     verify_token,
+    create_reset_password_token,
+    verify_reset_password_token,
     blacklist_collection
 )
 
@@ -30,6 +34,9 @@ async def get_user_by_id(user_id: str):
         return await users_collection.find_one({"_id": ObjectId(user_id)})
     except:
         return None
+    
+async def send_email(to: str, subject: str, body: str):
+    print(f"\n📩 Mengirim email ke: {to}\nSubjek: {subject}\nIsi:\n{body}\n")
 
 # == Routes ==
 @router.post("/register", response_model=UserOut)
@@ -103,7 +110,8 @@ async def login(form_data: UserLoginRequest = Depends()):
         "user_id": str(user["_id"]),
         "username": user["username"],
         "email": user["email"],
-        "role": user.get("role", "user")
+        "role": user.get("role", "user"),
+        "is_verified": user.get("is_verified", False)  # penting agar token bawa info verifikasi
     }
 
     access_token = create_access_token(data=token_data)
@@ -118,8 +126,49 @@ async def login(form_data: UserLoginRequest = Depends()):
         "token_type": "bearer"
     }
 
+@router.post("/request-password-reset")
+async def request_password_reset(data: PasswordResetRequest):
+    user = await users_collection.find_one({"email": data.email})
+    if not user:
+        raise HTTPException(status_code=404, detail="Email tidak ditemukan.")
+
+    token = create_reset_password_token(data.email)
+    encoded_token = quote(token)
+
+    reset_link = f"http://localhost:8000/reset-password?token={encoded_token}"
+    email_content = f"""
+    Anda meminta reset password.
+    Silakan klik link berikut untuk mengganti password:
+    {reset_link}
+
+    Abaikan jika Anda tidak meminta ini.
+    """
+
+    await send_email(
+        to=data.email,
+        subject="Permintaan Reset Password",
+        body=email_content
+    )
+
+    return {"message": "Link reset password telah dikirim ke email Anda."}
+
+@router.post("/reset-password")
+async def reset_password(data: PasswordResetConfirm):
+    email = verify_reset_password_token(data.token)
+    hashed_pw = hash_password(data.new_password)
+
+    result = await users_collection.update_one(
+        {"email": email},
+        {"$set": {"password": hashed_pw}}
+    )
+
+    if result.modified_count == 0:
+        raise HTTPException(status_code=400, detail="Gagal mengganti password.")
+
+    return {"message": "Password berhasil diperbarui. Silakan login kembali."}
+
 @router.get("/me")
-async def read_me(current_user: dict = Depends(get_current_user)):
+async def read_me(current_user: dict = Depends(get_verified_user)):  # ganti jadi verified user
     return {
         "id": str(current_user["user_id"]),
         "username": current_user["username"],
@@ -128,7 +177,14 @@ async def read_me(current_user: dict = Depends(get_current_user)):
     }
 
 @router.get("/users")
-async def get_users(skip: int = 0, limit: int = 10, username: str = Query(None), email: str = Query(None), role: str = Query(None)):
+async def get_users(
+    skip: int = 0, limit: int = 10, username: str = Query(None),
+    email: str = Query(None), role: str = Query(None),
+    current_user: dict = Depends(get_verified_user)  # ganti jadi verified user
+):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Hanya admin yang boleh mengakses ini.")
+
     query = {}
     if username: query["username"] = username
     if email: query["email"] = email
@@ -155,7 +211,10 @@ async def get_users(skip: int = 0, limit: int = 10, username: str = Query(None),
     }
 
 @router.patch("/users/{user_id}", response_model=UserOut)
-async def update_user(user_id: str, update_data: UserUpdate, current_user: dict = Depends(get_current_user)):
+async def update_user(
+    user_id: str, update_data: UserUpdate,
+    current_user: dict = Depends(get_verified_user)  # ganti jadi verified user
+):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Hanya admin yang dapat mengupdate user lain")
 
@@ -191,7 +250,10 @@ async def update_user(user_id: str, update_data: UserUpdate, current_user: dict 
     )
 
 @router.patch("/update-user/{user_id}")
-async def update_self(user_id: str, data: UserSelfUpdate, current_user: dict = Depends(get_current_user)):
+async def update_self(
+    user_id: str, data: UserSelfUpdate,
+    current_user: dict = Depends(get_verified_user)  # ganti jadi verified user
+):
     if current_user["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Kamu hanya dapat mengubah data dirimu sendiri.")
 
@@ -213,8 +275,29 @@ async def update_self(user_id: str, data: UserSelfUpdate, current_user: dict = D
 
     return {"message": "Data user berhasil diupdate."}
 
+@router.put("/change-password", tags=["Users"])
+async def change_password(
+    password_data: ChangePasswordRequest,
+    current_user: dict = Depends(get_verified_user)
+):
+    user = await users_collection.find_one({"_id": ObjectId(current_user["user_id"])})
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan")
+
+    if not verify_password(password_data.old_password, user["password"]):
+        raise HTTPException(status_code=400, detail="Password lama salah")
+
+    new_hashed = hash_password(password_data.new_password)
+    await users_collection.update_one(
+        {"_id": ObjectId(current_user["user_id"])},
+        {"$set": {"password": new_hashed}}
+    )
+
+    return {"message": "Password berhasil diubah"}
+
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str):
+async def delete_user(user_id: str, current_user: dict = Depends(get_verified_user)):  # ganti jadi verified user
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")

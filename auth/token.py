@@ -1,4 +1,4 @@
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -54,6 +54,16 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(beare
 async def get_current_user(token_data: dict = Depends(verify_token)):
     return token_data
 
+# === Tambahan: Dependency untuk user yang sudah verifikasi email ===
+
+async def get_verified_user(user: dict = Depends(get_current_user)):
+    if not user.get("is_verified", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akun Anda belum memverifikasi email. Silakan verifikasi terlebih dahulu."
+        )
+    return user
+
 # === Token untuk Verifikasi Email ===
 
 def create_email_verification_token(email: str, expires_delta: timedelta = timedelta(days=1)):
@@ -75,3 +85,25 @@ def verify_email_token(token: str):
     except JWTError as e:
         print("❌ JWT ERROR:", e)
         raise HTTPException(status_code=400, detail="Token verifikasi email tidak valid atau kadaluarsa")
+    
+# === Token untuk Reset Password ===
+
+def create_reset_password_token(email: str, expires_delta: timedelta = timedelta(minutes=30)):
+    expire = int(time.time()) + int(expires_delta.total_seconds())
+    payload = {
+        "sub": email,
+        "exp": expire,
+        "type": "reset"
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
+def verify_reset_password_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "reset":
+            raise HTTPException(status_code=400, detail="Token tidak valid untuk reset password")
+        return payload.get("sub")
+    except JWTError as e:
+        print("❌ JWT ERROR:", e)
+        raise HTTPException(status_code=400, detail="Token reset password tidak valid atau kadaluarsa")
