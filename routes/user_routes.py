@@ -1,9 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from bson import ObjectId
-from typing import Optional
-from jose import JWTError, jwt
-from urllib.parse import quote 
-from models.user_models import PasswordResetRequest, PasswordResetConfirm
+from urllib.parse import quote
+
+from models.user_models import (
+    UserCreate,
+    UserLoginRequest,
+    UserOut,
+    UserUpdate,
+    UserSelfUpdate,
+    PasswordResetRequest,
+    PasswordResetConfirm,
+    ChangePasswordRequest
+)
+
+from utils.email_utils import send_email, send_verification_email
 
 from auth.token import (
     SECRET_KEY,
@@ -13,7 +23,7 @@ from auth.token import (
     verify_password,
     create_access_token,
     get_current_user,
-    get_verified_user,  # <== tambah ini
+    get_verified_user,
     verify_token,
     create_reset_password_token,
     verify_reset_password_token,
@@ -21,7 +31,6 @@ from auth.token import (
 )
 
 from database import users_collection
-from models.user_models import *
 
 router = APIRouter()
 
@@ -34,9 +43,6 @@ async def get_user_by_id(user_id: str):
         return await users_collection.find_one({"_id": ObjectId(user_id)})
     except:
         return None
-    
-async def send_email(to: str, subject: str, body: str):
-    print(f"\n📩 Mengirim email ke: {to}\nSubjek: {subject}\nIsi:\n{body}\n")
 
 # == Routes ==
 @router.post("/register", response_model=UserOut)
@@ -48,21 +54,14 @@ async def register(user: UserCreate):
     hashed_password = hash_password(user.password)
     user_dict = user.dict()
     user_dict["password"] = hashed_password
-    user_dict["is_verified"] = False  # Tambahkan status verifikasi
-
-    # Debug print data user
-    print("📦 Data yang akan dimasukkan ke MongoDB:", user_dict)
+    user_dict["is_verified"] = False
 
     result = await users_collection.insert_one(user_dict)
-
     if not result.inserted_id:
         raise HTTPException(status_code=500, detail="Gagal menyimpan user ke database.")
 
-    # Buat token verifikasi email dan encode token agar aman di URL
     verification_token = create_email_verification_token(user.email)
-    encoded_token = quote(verification_token)  # encode token
-
-    print(f"🔗 Link verifikasi email:\nhttp://localhost:8000/verify-email?token={encoded_token}")
+    await send_verification_email(user.email, verification_token)
 
     return UserOut(
         message="Registrasi berhasil",
@@ -74,9 +73,7 @@ async def register(user: UserCreate):
 
 @router.get("/verify-email")
 async def verify_email(token: str = Query(...)):
-    # Pakai fungsi verify_email_token dari token.py untuk decode dan validasi token
     email = verify_email_token(token)
-
     user = await users_collection.find_one({"email": email})
     if not user:
         raise HTTPException(status_code=404, detail="User dengan email tersebut tidak ditemukan.")
@@ -88,9 +85,6 @@ async def verify_email(token: str = Query(...)):
         {"email": email},
         {"$set": {"is_verified": True}}
     )
-
-    if result.modified_count == 0:
-        return {"message": "Email sudah diverifikasi atau tidak ditemukan."}
 
     return {"message": "Email berhasil diverifikasi!"}
 
@@ -111,7 +105,7 @@ async def login(form_data: UserLoginRequest = Depends()):
         "username": user["username"],
         "email": user["email"],
         "role": user.get("role", "user"),
-        "is_verified": user.get("is_verified", False)  # penting agar token bawa info verifikasi
+        "is_verified": user.get("is_verified", False)
     }
 
     access_token = create_access_token(data=token_data)
@@ -144,11 +138,12 @@ async def request_password_reset(data: PasswordResetRequest):
     Abaikan jika Anda tidak meminta ini.
     """
 
-    await send_email(
-        to=data.email,
-        subject="Permintaan Reset Password",
-        body=email_content
+    send_email(
+    receiver_email=data.email,
+    subject="Permintaan Reset Password",
+    content=email_content
     )
+
 
     return {"message": "Link reset password telah dikirim ke email Anda."}
 
@@ -168,7 +163,7 @@ async def reset_password(data: PasswordResetConfirm):
     return {"message": "Password berhasil diperbarui. Silakan login kembali."}
 
 @router.get("/me")
-async def read_me(current_user: dict = Depends(get_verified_user)):  # ganti jadi verified user
+async def read_me(current_user: dict = Depends(get_verified_user)):
     return {
         "id": str(current_user["user_id"]),
         "username": current_user["username"],
@@ -178,9 +173,11 @@ async def read_me(current_user: dict = Depends(get_verified_user)):  # ganti jad
 
 @router.get("/users")
 async def get_users(
-    skip: int = 0, limit: int = 10, username: str = Query(None),
-    email: str = Query(None), role: str = Query(None),
-    current_user: dict = Depends(get_verified_user)  # ganti jadi verified user
+    skip: int = 0, limit: int = 10,
+    username: str = Query(None),
+    email: str = Query(None),
+    role: str = Query(None),
+    current_user: dict = Depends(get_verified_user)
 ):
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Hanya admin yang boleh mengakses ini.")
@@ -213,7 +210,7 @@ async def get_users(
 @router.patch("/users/{user_id}", response_model=UserOut)
 async def update_user(
     user_id: str, update_data: UserUpdate,
-    current_user: dict = Depends(get_verified_user)  # ganti jadi verified user
+    current_user: dict = Depends(get_verified_user)
 ):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Hanya admin yang dapat mengupdate user lain")
@@ -252,7 +249,7 @@ async def update_user(
 @router.patch("/update-user/{user_id}")
 async def update_self(
     user_id: str, data: UserSelfUpdate,
-    current_user: dict = Depends(get_verified_user)  # ganti jadi verified user
+    current_user: dict = Depends(get_verified_user)
 ):
     if current_user["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Kamu hanya dapat mengubah data dirimu sendiri.")
@@ -297,7 +294,7 @@ async def change_password(
     return {"message": "Password berhasil diubah"}
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, current_user: dict = Depends(get_verified_user)):  # ganti jadi verified user
+async def delete_user(user_id: str, current_user: dict = Depends(get_verified_user)):
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
