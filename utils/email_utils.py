@@ -6,11 +6,10 @@ import traceback
 
 load_dotenv()
 
-SMTP_KEY = os.getenv("SMTP_KEY")
-SENDER_EMAIL = "syayidabdann@gmail.com"
-
-# print("📡 SMTP_KEY:", SMTP_KEY)
-# print("📨 SENDER_EMAIL:", SENDER_EMAIL)
+SMTP_SERVER = os.getenv("SMTP_SERVER")           # smtp.ethereal.email
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))     # 587
+SMTP_KEY = os.getenv("SMTP_KEY")                 # dari Ethereal
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")         # email ethereal
 
 def send_email(receiver_email: str, subject: str, content: str):
     try:
@@ -20,7 +19,9 @@ def send_email(receiver_email: str, subject: str, content: str):
         msg["To"] = receiver_email
         msg.set_content(content, subtype="html")
 
-        with smtplib.SMTP("smtp-relay.brevo.com", 587) as server:
+        print(f"📤 Sending email to {receiver_email} from {SENDER_EMAIL}...")
+
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SENDER_EMAIL, SMTP_KEY)
             server.send_message(msg)

@@ -61,7 +61,7 @@ async def register(user: UserCreate):
         raise HTTPException(status_code=500, detail="Gagal menyimpan user ke database.")
 
     verification_token = create_email_verification_token(user.email)
-    await send_verification_email(user.email, verification_token)
+    send_verification_email(user.email, verification_token)
 
     return UserOut(
         message="Registrasi berhasil",
