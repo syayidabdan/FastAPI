@@ -8,31 +8,33 @@ load_dotenv()
 
 SMTP_SERVER = os.getenv("SMTP_SERVER")           # smtp.ethereal.email
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))     # 587
-SMTP_KEY = os.getenv("SMTP_KEY")                 # dari Ethereal
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")                  # dari Ethereal
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")         # email ethereal
 
-def send_email(receiver_email: str, subject: str, content: str):
+def send_email(to_email: str, subject: str, body: str):
+    # DEBUG: Tampilkan isi email ke terminal
+    print("\n📧 Simulated Email")
+    print(f"To: {to_email}")
+    print(f"Subject: {subject}")
+    print("Body:")
+    print(body)
+    print("=============================\n")
+
+    # Tetap kirim email seperti biasa
+    message = EmailMessage()
+    message["From"] = SENDER_EMAIL
+    message["To"] = to_email
+    message["Subject"] = subject
+    message.set_content(body, subtype="html")
+
     try:
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = SENDER_EMAIL
-        msg["To"] = receiver_email
-        msg.set_content(content, subtype="html")
-
-        print(f"📤 Sending email to {receiver_email} from {SENDER_EMAIL}...")
-
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
-            server.login(SENDER_EMAIL, SMTP_KEY)
-            server.send_message(msg)
-
-        print("✅ Email sent successfully")
-        return True
-
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(message)
+        print(f"✅ Email sent successfully to {to_email}")
     except Exception as e:
-        traceback.print_exc()
-        print("❌ Failed to send email:", e)
-        return False
+        print(f"❌ Failed to send email: {e}")
 
 def send_verification_email(receiver_email: str, token: str):
     subject = "Verifikasi Email Akun Anda"

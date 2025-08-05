@@ -51,6 +51,12 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(beare
     except JWTError:
         raise HTTPException(status_code=401, detail="Token tidak valid")
 
+def create_token(data: dict, expires_in_minutes: int):
+    expire = datetime.utcnow() + timedelta(minutes=expires_in_minutes)
+    data.update({"exp": expire})
+    token = jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
 async def get_current_user(token_data: dict = Depends(verify_token)):
     return token_data
 
@@ -107,3 +113,10 @@ def verify_reset_password_token(token: str):
     except JWTError as e:
         print("❌ JWT ERROR:", e)
         raise HTTPException(status_code=400, detail="Token reset password tidak valid atau kadaluarsa")
+    
+def verify_token_from_string(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError as e:
+        raise HTTPException(status_code=400, detail="Token tidak valid atau sudah kedaluwarsa")

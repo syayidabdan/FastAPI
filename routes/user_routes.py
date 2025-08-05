@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from bson import ObjectId
 from urllib.parse import quote
 
+from jose import JWTError
+
 from models.user_models import (
     UserCreate,
     UserLoginRequest,
@@ -10,7 +12,8 @@ from models.user_models import (
     UserSelfUpdate,
     PasswordResetRequest,
     PasswordResetConfirm,
-    ChangePasswordRequest
+    ChangePasswordRequest,
+    EmailChangeRequest
 )
 
 from utils.email_utils import send_email, send_verification_email
@@ -18,6 +21,7 @@ from utils.email_utils import send_email, send_verification_email
 from auth.token import (
     SECRET_KEY,
     create_email_verification_token,
+    create_token,
     verify_email_token,
     hash_password,
     verify_password,
@@ -27,7 +31,8 @@ from auth.token import (
     verify_token,
     create_reset_password_token,
     verify_reset_password_token,
-    blacklist_collection
+    blacklist_collection,
+    verify_token_from_string
 )
 
 from database import users_collection
@@ -71,22 +76,90 @@ async def register(user: UserCreate):
         role=user.role
     )
 
-@router.get("/verify-email")
-async def verify_email(token: str = Query(...)):
-    email = verify_email_token(token)
-    user = await users_collection.find_one({"email": email})
-    if not user:
-        raise HTTPException(status_code=404, detail="User dengan email tersebut tidak ditemukan.")
+@router.put("/users/change-email")
+async def change_email(
+    payload: EmailChangeRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    print("DEBUG current_user:", current_user)
 
-    if user.get("is_verified", False):
-        return {"message": "Email sudah diverifikasi sebelumnya."}
+    user_id = current_user.get("user_id")   # fix di sini
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID tidak ditemukan")
 
-    result = await users_collection.update_one(
-        {"email": email},
-        {"$set": {"is_verified": True}}
+    try:
+        user_obj_id = ObjectId(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="User ID tidak valid")
+
+    new_email = payload.new_email
+
+    # cek apakah email baru sudah ada
+    existing_user = await users_collection.find_one({"email": new_email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email sudah digunakan")
+
+    # bikin token verifikasi untuk email baru
+    token_data = {
+        "sub": new_email,
+        "type": "verify_new_email"
+    }
+    verification_token = create_token(token_data, expires_in_minutes=60 * 24)
+
+    verification_link = f"http://localhost:8000/users/verify-new-email?token={verification_token}"
+    email_body = f"""
+        <p>Klik link berikut untuk memverifikasi email baru Anda:<br>
+        <a href="{verification_link}">{verification_link}</a></p>
+    """
+    send_email(new_email, "Verifikasi Email Baru Anda", email_body)
+
+    # update user
+    await users_collection.update_one(
+        {"_id": user_obj_id},
+        {
+            "$set": {
+                "is_verified": False,
+                "pending_email": new_email,
+                "email_verification_token": verification_token
+            }
+        }
     )
 
-    return {"message": "Email berhasil diverifikasi!"}
+    return {"message": "Silakan cek email baru Anda untuk verifikasi"}
+
+@router.get("/users/verify-new-email")
+async def verify_new_email(token: str, request: Request):
+    try:
+        # ✅ Gunakan fungsi khusus ini
+        payload = verify_token_from_string(token)
+
+        if payload["type"] != "verify_new_email":
+            raise HTTPException(status_code=400, detail="Token tidak valid untuk verifikasi email baru")
+
+        new_email = payload["sub"]
+
+        user = await users_collection.find_one({"email_verification_token": token})
+        if not user:
+            raise HTTPException(status_code=404, detail="User tidak ditemukan atau token tidak valid")
+
+        await users_collection.update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "email": new_email,
+                    "is_verified": True
+                },
+                "$unset": {
+                    "pending_email": "",
+                    "email_verification_token": ""
+                }
+            }
+        )
+
+        return {"message": "Email berhasil diverifikasi"}
+
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Token tidak valid atau sudah kedaluwarsa")
 
 @router.post("/login")
 async def login(form_data: UserLoginRequest = Depends()):
