@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from bson import ObjectId
 from urllib.parse import quote
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from jose import JWTError
 
 from models.user_models import (
     UserCreate,
-    UserLoginRequest,
     UserOut,
     UserUpdate,
     UserSelfUpdate,
@@ -38,6 +38,7 @@ from auth.token import (
 from database import users_collection
 
 router = APIRouter()
+security = HTTPBasic()
 
 # == Utilities ==
 async def get_user_by_email(email: str):
@@ -162,15 +163,15 @@ async def verify_new_email(token: str, request: Request):
         raise HTTPException(status_code=400, detail="Token tidak valid atau sudah kedaluwarsa")
 
 @router.post("/login")
-async def login(form_data: UserLoginRequest = Depends()):
+async def login(credentials: HTTPBasicCredentials = Depends(security)):
     user = await users_collection.find_one({
         "$or": [
-            {"email": form_data.username},
-            {"username": form_data.username}
+            {"email": credentials.username},
+            {"username": credentials.username}
         ]
     })
 
-    if not user or not verify_password(form_data.password, user["password"]):
+    if not user or not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=401, detail="Login gagal")
 
     token_data = {
@@ -184,11 +185,6 @@ async def login(form_data: UserLoginRequest = Depends()):
     access_token = create_access_token(data=token_data)
 
     return {
-        "user": {
-            "id": str(user["_id"]),
-            "username": user["username"],
-            "email": user["email"]
-        },
         "access_token": access_token,
         "token_type": "bearer"
     }

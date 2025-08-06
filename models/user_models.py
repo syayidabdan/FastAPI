@@ -21,11 +21,6 @@ class UserPassword(UserBase):
 class UserCreate(UserPassword):
     pass
 
-# === Model Saat Login ===
-class UserLoginRequest(BaseModel):
-    username: str
-    password: str
-
 # === Model Untuk Output ===
 class UserOut(UserBase):
     id: str

@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from dotenv import load_dotenv
 import os
 from database import db
-from routes import user_routes
+from routes import user_routes, fakultas_routes
 
 # Load environment variables
 load_dotenv()
@@ -19,3 +19,5 @@ app.include_router(user_routes.router)
 @app.get("/")
 def root():
     return {"message": "FastAPI Backend is running."}
+
+app.include_router(fakultas_routes.router, prefix="/fakultas", tags=["Fakultas"])
