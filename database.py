@@ -1,18 +1,16 @@
 # database.py
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient  # Import ini wajib ada
 from dotenv import load_dotenv
-import os
+import os  # Import ini juga wajib ada
 
-# Load environment variables
 load_dotenv()
 
-# === MongoDB Connection ===
 MONGO_URI = os.getenv("MONGO_URI")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client.fastAPI
 
-# === Collections ===
 users_collection = db.users
-blacklist_collection = db.blacklist  # digunakan untuk logout (JWT blacklist)
+blacklist_collection = db.blacklist
 
-fakultas_collection = db["fakultas"]
+fakultas_collection = db.fakultas
+prodi_collection = db.prodi
