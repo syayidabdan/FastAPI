@@ -38,7 +38,7 @@ def send_email(to_email: str, subject: str, body: str):
 
 def send_verification_email(receiver_email: str, token: str):
     subject = "Verifikasi Email Akun Anda"
-    verify_link = f"http://localhost:8000/verify-email?token={token}"
+    verify_link = f"http://localhost:8000/users/verify-email?token={token}"
 
     content = f"""
     <html>

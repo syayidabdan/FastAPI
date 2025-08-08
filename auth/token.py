@@ -79,7 +79,7 @@ def create_email_verification_token(email: str, expires_delta: timedelta = timed
         "exp": expire,
         "type": "verify"
     }
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)  # pastikan algorithm konsisten
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return token
 
 def verify_email_token(token: str):
@@ -91,7 +91,7 @@ def verify_email_token(token: str):
     except JWTError as e:
         print("❌ JWT ERROR:", e)
         raise HTTPException(status_code=400, detail="Token verifikasi email tidak valid atau kadaluarsa")
-    
+
 # === Token untuk Reset Password ===
 
 def create_reset_password_token(email: str, expires_delta: timedelta = timedelta(minutes=30)):
@@ -113,10 +113,21 @@ def verify_reset_password_token(token: str):
     except JWTError as e:
         print("❌ JWT ERROR:", e)
         raise HTTPException(status_code=400, detail="Token reset password tidak valid atau kadaluarsa")
-    
-def verify_token_from_string(token: str):
+
+# === Token Verifikasi Umum dari String (misalnya dari URL query param) ===
+
+def verify_token_from_string(token: str, token_type: str = None):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if token_type and payload.get("type") != token_type:
+            raise HTTPException(status_code=400, detail=f"Token tidak valid untuk tipe: {token_type}")
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Token tidak valid atau sudah kedaluwarsa")
+
+def decode_token(token: str):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
-    except JWTError as e:
-        raise HTTPException(status_code=400, detail="Token tidak valid atau sudah kedaluwarsa")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token tidak valid atau sudah kedaluwarsa")

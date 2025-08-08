@@ -22,6 +22,7 @@ from auth.token import (
     SECRET_KEY,
     create_email_verification_token,
     create_token,
+    decode_token,
     verify_email_token,
     hash_password,
     verify_password,
@@ -76,6 +77,21 @@ async def register(user: UserCreate):
         email=user.email,
         role=user.role
     )
+
+@router.get("/verify-email")
+async def verify_email(token: str):
+    payload = decode_token(token)
+    email = payload.get("sub")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Token tidak mengandung email")
+
+    # Update status is_verified jadi True
+    result = await users_collection.update_one({"email": email}, {"$set": {"is_verified": True}})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan atau sudah terverifikasi")
+
+    return {"message": "Email berhasil diverifikasi"}
 
 @router.put("/users/change-email")
 async def change_email(
